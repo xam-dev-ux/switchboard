@@ -1,6 +1,6 @@
-// Patches @xmtp/proto ESM dist: adds missing .js extensions to all .pb imports.
-// The published package imports './foo.pb' but the file on disk is './foo.pb.js' —
-// Node's strict ESM resolver requires explicit extensions.
+// Patches @xmtp/proto ESM dist: adds missing .js extensions to all imports.
+// The published package omits .js from relative .pb paths and from
+// protobufjs/minimal — both break under Node's strict ESM resolver.
 const fs   = require("fs");
 const path = require("path");
 
@@ -11,7 +11,7 @@ function findProtoDir() {
     const candidate = path.join(dir, "node_modules", "@xmtp", "proto");
     if (fs.existsSync(candidate)) return candidate;
     const parent = path.dirname(dir);
-    if (parent === dir) return null; // filesystem root
+    if (parent === dir) return null;
     dir = parent;
   }
 }
@@ -34,11 +34,15 @@ function patch(dir) {
     if (entry.isDirectory()) { patch(full); continue; }
     if (!entry.name.endsWith(".js")) continue;
     const original = fs.readFileSync(full, "utf8");
-    const fixed = original
+    let fixed = original
+      // relative .pb imports missing .js
       .replace(/from "(\.[^"]*\.pb)"/g,   'from "$1.js"')
       .replace(/from '(\.[^']*\.pb)'/g,   "from '$1.js'")
       .replace(/import "(\.[^"]*\.pb)"/g, 'import "$1.js"')
-      .replace(/import '(\.[^']*\.pb)'/g, "import '$1.js'");
+      .replace(/import '(\.[^']*\.pb)'/g, "import '$1.js'")
+      // protobufjs/minimal bare import missing .js
+      .replace(/from "protobufjs\/minimal"/g, 'from "protobufjs/minimal.js"')
+      .replace(/from 'protobufjs\/minimal'/g, "from 'protobufjs/minimal.js'");
     if (fixed !== original) {
       fs.writeFileSync(full, fixed);
       console.log("[patch-xmtp-proto] fixed:", path.relative(protoDir, full));
