@@ -1,4 +1,5 @@
-import { SCAN_API_BASE } from "./constants.js";
+import { publicClient } from "./wallet.js";
+import { IDENTITY_REGISTRY, DEMO_AGENT_ENDPOINT } from "./constants.js";
 
 export type SubAgent = {
   agentId:      number;
@@ -11,60 +12,122 @@ export type SubAgent = {
   capabilities: string[];
 };
 
-type Registration = {
-  name:         string;
-  description:  string;
-  endpoint:     string;
-  capabilities: string[];
-};
+const TOKEN_URI_ABI = [
+  {
+    name: "tokenURI",
+    type: "function",
+    stateMutability: "view",
+    inputs:  [{ name: "tokenId", type: "uint256" }],
+    outputs: [{ name: "", type: "string" }],
+  },
+] as const;
+
+const SCAN_BASE = "https://8004scan.io/api/v1";
 
 export async function findBestAgent(task: string): Promise<SubAgent | null> {
-  const keyword = encodeURIComponent(task.slice(0, 64));
-  let candidates: SubAgent[] = [];
+  const candidates: SubAgent[] = [];
 
+  // ── 1. Query 8004scan for Base agents ─────────────────────────────────────
   try {
-    const res = await fetch(`${SCAN_API_BASE}/api/agents?q=${keyword}&limit=20&minScore=85`, {
+    const keyword = encodeURIComponent(task.slice(0, 64));
+    const res = await fetch(`${SCAN_BASE}/agents?chain_id=8453&q=${keyword}&limit=20`, {
       signal: AbortSignal.timeout(8000),
     });
     if (res.ok) {
-      const data = await res.json() as { agents?: any[] };
-      const raw = data.agents ?? [];
-      candidates = raw
-        .filter((a: any) => a.score >= 85)
-        .map((a: any) => ({
-          agentId:      Number(a.agentId ?? a.id),
-          name:         String(a.name ?? "unknown"),
-          chain:        String(a.chain ?? "base"),
-          score:        Number(a.score),
-          endpoint:     String(a.endpoint ?? ""),
-          hasX402:      Boolean(a.hasX402 ?? a.has_x402 ?? false),
-          price:        Number(a.price ?? a.priceUsdc ?? 0),
-          capabilities: Array.isArray(a.capabilities) ? a.capabilities.map(String) : [],
-        }))
-        .filter((a) => a.hasX402 && a.endpoint);
+      const data = await res.json() as { items?: any[] };
+      const items = data.items ?? [];
+
+      // For each agent, try to get its HTTP endpoint from the on-chain tokenURI
+      await Promise.all(items.slice(0, 10).map(async (item: any) => {
+        const tokenId = Number(item.token_id);
+        const score   = Number(item.total_score ?? 0);
+
+        let endpoint     = "";
+        let capabilities: string[] = [];
+
+        try {
+          const uri = await publicClient.readContract({
+            address: IDENTITY_REGISTRY as `0x${string}`,
+            abi: TOKEN_URI_ABI,
+            functionName: "tokenURI",
+            args: [BigInt(tokenId)],
+          }) as string;
+
+          const meta = await parseAgentURI(uri);
+          if (meta) {
+            endpoint     = meta.endpoint ?? "";
+            capabilities = meta.capabilities ?? [];
+          }
+        } catch {
+          // agent has no tokenURI or unreachable metadata
+        }
+
+        // Only include agents with HTTP endpoints
+        if (!endpoint.startsWith("http")) return;
+
+        candidates.push({
+          agentId:      tokenId,
+          name:         String(item.name ?? "unknown"),
+          chain:        "base",
+          score,
+          endpoint,
+          hasX402:      Boolean(item.x402_supported),
+          price:        0,  // will be probed below
+          capabilities,
+        });
+      }));
     }
   } catch (e) {
     console.error("[registry] 8004scan fetch error:", e);
   }
 
+  // ── 2. Fallback: demo agent from env var ───────────────────────────────────
+  if (!candidates.length && DEMO_AGENT_ENDPOINT) {
+    candidates.push({
+      agentId:      0,
+      name:         "Demo Agent",
+      chain:        "base",
+      score:        100,
+      endpoint:     DEMO_AGENT_ENDPOINT,
+      hasX402:      true,
+      price:        0,
+      capabilities: ["general"],
+    });
+  }
+
   if (!candidates.length) return null;
 
-  // Probe prices for agents that don't have price info yet
+  // ── 3. Probe prices for agents without price info ──────────────────────────
   await Promise.all(
     candidates
       .filter((a) => a.price === 0)
-      .map(async (a) => {
-        a.price = await probeAgentPrice(a.endpoint);
-      }),
+      .map(async (a) => { a.price = await probeAgentPrice(a.endpoint); }),
   );
 
-  // Sort: score desc, then price asc
-  candidates.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    return a.price - b.price;
-  });
+  // ── 4. Sort: score desc, price asc ────────────────────────────────────────
+  candidates.sort((a, b) => b.score - a.score || a.price - b.price);
 
   return candidates[0] ?? null;
+}
+
+async function parseAgentURI(uri: string): Promise<Record<string, any> | null> {
+  try {
+    // data:application/json;base64,...
+    if (uri.startsWith("data:application/json;base64,")) {
+      const b64 = uri.slice("data:application/json;base64,".length).trim();
+      return JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
+    }
+    // data:application/json,...
+    if (uri.startsWith("data:application/json,")) {
+      return JSON.parse(decodeURIComponent(uri.slice("data:application/json,".length)));
+    }
+    // https:// → fetch the JSON
+    if (uri.startsWith("https://") || uri.startsWith("http://")) {
+      const res = await fetch(uri, { signal: AbortSignal.timeout(4000) });
+      if (res.ok) return await res.json() as Record<string, any>;
+    }
+  } catch {}
+  return null;
 }
 
 async function probeAgentPrice(endpoint: string): Promise<number> {
@@ -86,28 +149,6 @@ async function probeAgentPrice(endpoint: string): Promise<number> {
         }
       }
     }
-  } catch {
-    // unreachable endpoint
-  }
+  } catch {}
   return 0;
 }
-
-async function resolveAgentRegistration(chain: string, agentId: number): Promise<Registration> {
-  try {
-    const res = await fetch(`${SCAN_API_BASE}/api/agents/${chain}/${agentId}`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    if (res.ok) {
-      const data = await res.json() as any;
-      return {
-        name:         String(data.name ?? ""),
-        description:  String(data.description ?? ""),
-        endpoint:     String(data.endpoint ?? ""),
-        capabilities: Array.isArray(data.capabilities) ? data.capabilities.map(String) : [],
-      };
-    }
-  } catch {}
-  return { name: "", description: "", endpoint: "", capabilities: [] };
-}
-
-export { resolveAgentRegistration };
