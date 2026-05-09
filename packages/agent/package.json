@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/patch-xmtp-proto.cjs",
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts"
