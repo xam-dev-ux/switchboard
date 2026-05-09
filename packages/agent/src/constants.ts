@@ -10,3 +10,4 @@ export const VAULT_ADDRESS       = (process.env.VAULT_ADDRESS ?? "") as `0x${str
 export const AGENT_WALLET_ADDRESS = (process.env.AGENT_WALLET_ADDRESS ?? "") as `0x${string}`;
 export const BOT_URL             = process.env.BOT_URL ?? "http://localhost:3000";
 export const PORT                = Number(process.env.PORT ?? 3000);
+export const ERC8004_AGENT_ID    = Number(process.env.ERC8004_AGENT_ID ?? "0");

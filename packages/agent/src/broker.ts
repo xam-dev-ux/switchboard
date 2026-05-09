@@ -1,7 +1,7 @@
 import { randomBytes } from "crypto";
 import { findBestAgent } from "./registry.js";
 import { callAgentEndpoint } from "./caller.js";
-import { recordJob } from "./vault.js";
+import { recordJob, submitJobFeedback } from "./vault.js";
 import { pendingPayments, paymentStatus, jobLog, agentStats, sessions } from "./sessions.js";
 import { USER_FEE, MIN_MARGIN, BOT_URL, AGENT_WALLET_ADDRESS } from "./constants.js";
 import { publicClient } from "./wallet.js";
@@ -124,6 +124,9 @@ export async function processPayment(
     });
 
     paymentStatus.set(nonce, { status: "done", jobTx });
+
+    // Fire-and-forget: submit reputation feedback after every successful job
+    submitJobFeedback(pending.agent.endpoint).catch(console.error);
 
     // Update in-memory stats
     const margin = Number(USER_FEE) - pending.agent.price;
