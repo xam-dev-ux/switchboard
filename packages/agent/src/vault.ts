@@ -1,4 +1,4 @@
-import { concat, encodeFunctionData, hexToBytes } from "viem";
+import { encodeFunctionData } from "viem";
 import { walletClient } from "./wallet.js";
 import { VAULT_ADDRESS, BUILDER_CODE, REPUTATION_REGISTRY, ERC8004_AGENT_ID } from "./constants.js";
 
@@ -64,11 +64,8 @@ export async function recordJob(params: RecordJobParams): Promise<`0x${string}`>
   });
 
   // ERC-8021: append builder code bytes to every calldata
-  const suffix = BUILDER_CODE
-    ? hexToBytes(`0x${Buffer.from(BUILDER_CODE).toString("hex")}`)
-    : new Uint8Array(0);
-
-  const data = concat([calldata, suffix]);
+  const suffix = BUILDER_CODE ? Buffer.from(BUILDER_CODE).toString("hex") : "";
+  const data = (calldata + suffix) as `0x${string}`;
 
   return walletClient.sendTransaction({ to: VAULT_ADDRESS, data });
 }
