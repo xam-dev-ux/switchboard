@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: switchboard-agent
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: node dist/index.js
+    envVars:
+      - key: AGENT_PRIVATE_KEY
+        sync: false
+      - key: AGENT_WALLET_ADDRESS
+        sync: false
+      - key: VAULT_ADDRESS
+        sync: false
+      - key: BUILDER_CODE
+        value: "bc_CHANGEME"
+      - key: BASE_RPC_URL
+        value: "https://mainnet.base.org"
+      - key: USER_FEE
+        value: "50000"
+      - key: MIN_MARGIN
+        value: "10000"
+      - key: PORT
+        value: "3000"
+      - key: BOT_URL
+        sync: false

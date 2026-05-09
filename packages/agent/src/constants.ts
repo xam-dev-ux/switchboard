@@ -1,0 +1,12 @@
+export const IDENTITY_REGISTRY   = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432";
+export const REPUTATION_REGISTRY = "0x8004BAa17C55a88189AE136b182e5fdA19dE9b63";
+export const USDC_ADDRESS        = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+export const BASE_RPC            = "https://mainnet.base.org";
+export const SCAN_API_BASE       = "https://8004scan.io";
+export const USER_FEE            = BigInt(process.env.USER_FEE   ?? "50000");  // $0.05
+export const MIN_MARGIN          = BigInt(process.env.MIN_MARGIN ?? "10000");  // $0.01
+export const BUILDER_CODE        = process.env.BUILDER_CODE ?? "";
+export const VAULT_ADDRESS       = (process.env.VAULT_ADDRESS ?? "") as `0x${string}`;
+export const AGENT_WALLET_ADDRESS = (process.env.AGENT_WALLET_ADDRESS ?? "") as `0x${string}`;
+export const BOT_URL             = process.env.BOT_URL ?? "http://localhost:3000";
+export const PORT                = Number(process.env.PORT ?? 3000);

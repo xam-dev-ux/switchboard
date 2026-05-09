@@ -1,0 +1,9 @@
+{
+  "name": "switchboard",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build:agent":     "npm run build --workspace=packages/agent",
+    "build:dashboard": "npm run build --workspace=packages/dashboard"
+  }
+}

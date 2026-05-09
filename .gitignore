@@ -1,0 +1,28 @@
+# ── NEVER COMMIT ────────────────────────────────────────────
+# Environment files with private keys and secrets
+.env
+.env.local
+.env.*.local
+packages/**/.env
+packages/**/.env.local
+
+# ── Dependencies ─────────────────────────────────────────────
+node_modules/
+packages/*/node_modules/
+
+# ── Build output ─────────────────────────────────────────────
+dist/
+packages/*/dist/
+
+# ── Hardhat ──────────────────────────────────────────────────
+packages/contracts/cache/
+packages/contracts/artifacts/
+packages/contracts/typechain-types/
+
+# ── Vite / dashboard ─────────────────────────────────────────
+packages/dashboard/.vite/
+
+# ── Misc ─────────────────────────────────────────────────────
+.DS_Store
+*.log
+npm-debug.log*
