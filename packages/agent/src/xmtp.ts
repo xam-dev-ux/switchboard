@@ -1,5 +1,6 @@
-import { Client } from "@xmtp/node-sdk";
+import { Client, type Signer } from "@xmtp/node-sdk";
 import { privateKeyToAccount } from "viem/accounts";
+import { hexToBytes } from "viem";
 import { randomBytes } from "crypto";
 import { handleUserRequest, getAgentUSDCBalance } from "./broker.js";
 import { sessions, jobLog, agentStats } from "./sessions.js";
@@ -31,35 +32,55 @@ function buildSendFn(client: Client, convId: string): (text: string) => Promise<
   };
 }
 
-export async function startXmtp(): Promise<Client> {
-  const account = privateKeyToAccount(process.env.AGENT_PRIVATE_KEY as `0x${string}`);
+function makeXmtpSigner(privateKey: `0x${string}`): Signer {
+  const account = privateKeyToAccount(privateKey);
+  return {
+    getAddress: (): string => account.address,
+    signMessage: async (message: string): Promise<Uint8Array> => {
+      const sig = await account.signMessage({ message });
+      return hexToBytes(sig);
+    },
+  };
+}
 
-  const client = await Client.create(account, { env: "production" });
-  console.log("[xmtp] Agent address:", client.accountAddress);
+export async function startXmtp(): Promise<Client> {
+  const privateKey = process.env.AGENT_PRIVATE_KEY as `0x${string}`;
+  const signer = makeXmtpSigner(privateKey);
+  const address = signer.getAddress() as string;
+  // Derive a deterministic 32-byte encryption key from the private key
+  const encryptionKey = hexToBytes(privateKey);
+
+  const client = await Client.create(signer, encryptionKey, { env: "production" });
+  console.log("[xmtp] Agent address:", address);
 
   await client.conversations.sync();
   console.log("[xmtp] Listening for messages…");
 
-  listenForMessages(client).catch(console.error);
+  listenForMessages(client, address).catch(console.error);
 
   return client;
 }
 
-async function listenForMessages(client: Client): Promise<void> {
+async function listenForMessages(client: Client, agentAddress: string): Promise<void> {
   const stream = await client.conversations.streamAllMessages();
 
   for await (const message of stream) {
     if (!message) continue;
-    // Skip messages sent by the agent itself
-    if (message.senderAddress?.toLowerCase() === client.accountAddress?.toLowerCase()) continue;
 
-    const convId      = message.conversationId;
-    const text        = typeof message.content === "string" ? message.content.trim() : "";
-    const userAddress = (message.senderAddress ?? "") as `0x${string}`;
-    const send        = buildSendFn(client, convId);
-    const sessionKey  = userAddress.toLowerCase();
+    // DecodedMessage v3: sender is senderInboxId (may equal wallet address for v3 DMs)
+    const msg       = message as any;
+    const senderId  = (msg.senderInboxId ?? msg.senderAddress ?? "") as string;
+    const convId    = (msg.conversationId ?? "") as string;
+    const content   = msg.content ?? msg.contentStr ?? "";
+    const text      = typeof content === "string" ? content.trim() : "";
 
+    // Skip own messages
+    if (senderId.toLowerCase() === agentAddress.toLowerCase()) continue;
     if (!text) continue;
+
+    const userAddress = senderId as `0x${string}`;
+    const send        = buildSendFn(client, convId);
+    const sessionKey  = senderId.toLowerCase();
 
     // Upsert session
     if (!sessions.has(sessionKey)) {
@@ -90,13 +111,11 @@ async function listenForMessages(client: Client): Promise<void> {
       continue;
     }
 
-    // Legacy fallback — ignored in main flow (browser pay page handles it)
     if (cmd === "confirm" || cmd === "paid") {
       await send("✅ Payment is processed via the browser pay page. No manual confirmation needed.");
       continue;
     }
 
-    // Default: route to broker
     const nonce = randomBytes(16).toString("hex");
     handleUserRequest(userAddress, text, send, sessionKey, nonce).catch((e) =>
       console.error("[xmtp] handleUserRequest error:", e),
