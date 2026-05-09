@@ -90,18 +90,19 @@ export async function findBestAgent(task: string): Promise<SubAgent | null> {
       score:        100,
       endpoint:     DEMO_AGENT_ENDPOINT,
       hasX402:      true,
-      price:        0,
+      price:        10000, // default $0.01 if probe finds nothing
       capabilities: ["general"],
     });
   }
 
   if (!candidates.length) return null;
 
-  // ── 3. Probe prices for agents without price info ──────────────────────────
+  // ── 3. Probe prices (only override if probe finds a real value) ───────────
   await Promise.all(
-    candidates
-      .filter((a) => a.price === 0)
-      .map(async (a) => { a.price = await probeAgentPrice(a.endpoint); }),
+    candidates.map(async (a) => {
+      const probed = await probeAgentPrice(a.endpoint);
+      if (probed > 0) a.price = probed;
+    }),
   );
 
   // ── 4. Sort: score desc, price asc ────────────────────────────────────────

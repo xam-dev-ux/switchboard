@@ -1,4 +1,4 @@
-export function buildPayPage(amountUSDC: number, description: string, agentAddress: string): string {
+export function buildPayPage(amountUSDC: number, description: string, agentAddress: string, nonce = ""): string {
   const amountMicro = String(Math.round(amountUSDC * 1e6));
   return `<!DOCTYPE html>
 <html lang="en">
@@ -58,7 +58,7 @@ export function buildPayPage(amountUSDC: number, description: string, agentAddre
     const USDC_ADDRESS  = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
     const AGENT_ADDRESS = '${agentAddress}';
     const AMOUNT_MICRO  = ${amountMicro}n;
-    const NONCE         = new URLSearchParams(location.search).get('nonce') ?? '';
+    const NONCE         = '${nonce}' || location.pathname.split('/').pop() || '';
 
     const TRANSFER_ABI = [{
       name: 'transfer', type: 'function', stateMutability: 'nonpayable',

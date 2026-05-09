@@ -102,7 +102,7 @@ async function handler(req: http.IncomingMessage, res: http.ServerResponse): Pro
       return;
     }
     if (isBrowser(req)) {
-      const html = buildPayPage(Number(USER_FEE) / 1e6, "SWITCHBOARD service", AGENT_WALLET_ADDRESS);
+      const html = buildPayPage(Number(USER_FEE) / 1e6, "SWITCHBOARD service", AGENT_WALLET_ADDRESS, nonce);
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end(html);
     } else {
