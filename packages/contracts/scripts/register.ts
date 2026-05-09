@@ -83,17 +83,15 @@ async function main() {
   const receipt = await tx.wait();
   console.log("[register] Confirmed in block", receipt.blockNumber);
 
-  // Parse agentId from Registered event
-  const iface    = new ethers.Interface(REGISTRY_ABI);
-  let agentId    = "";
+  // agentId is the ERC-721 tokenId — read from the Transfer(0x0→owner) topic[3]
+  // Registered event has agentId as indexed so it lives in topics, not data
+  let agentId = "";
+  const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
   for (const log of receipt.logs) {
-    try {
-      const parsed = iface.parseLog(log);
-      if (parsed?.name === "Registered") {
-        agentId = parsed.args[0].toString();
-        break;
-      }
-    } catch {}
+    if (log.topics[0] === TRANSFER_TOPIC && log.topics[1] === ethers.zeroPadValue("0x00", 32)) {
+      agentId = BigInt(log.topics[3]).toString();
+      break;
+    }
   }
 
   if (agentId) {
