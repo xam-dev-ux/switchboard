@@ -1,6 +1,6 @@
-import { Client, type Signer } from "@xmtp/node-sdk";
+import { Client, IdentifierKind } from "@xmtp/node-sdk";
 import { privateKeyToAccount } from "viem/accounts";
-import { hexToBytes } from "viem";
+import { toBytes, keccak256 } from "viem";
 import { randomBytes } from "crypto";
 import { handleUserRequest, getAgentUSDCBalance } from "./broker.js";
 import { sessions, jobLog, agentStats } from "./sessions.js";
@@ -32,100 +32,95 @@ function buildSendFn(client: Client, convId: string): (text: string) => Promise<
   };
 }
 
-function makeXmtpSigner(privateKey: `0x${string}`): Signer {
-  const account = privateKeyToAccount(privateKey);
-  return {
-    getAddress: (): string => account.address,
-    signMessage: async (message: string): Promise<Uint8Array> => {
-      const sig = await account.signMessage({ message });
-      return hexToBytes(sig);
-    },
-  };
-}
-
 export async function startXmtp(): Promise<Client> {
   const privateKey = process.env.AGENT_PRIVATE_KEY as `0x${string}`;
-  const signer = makeXmtpSigner(privateKey);
-  const address = signer.getAddress() as string;
-  // Derive a deterministic 32-byte encryption key from the private key
-  const encryptionKey = hexToBytes(privateKey);
+  const account    = privateKeyToAccount(privateKey);
 
-  const client = await Client.create(signer, encryptionKey, { env: "production" });
-  console.log("[xmtp] Agent address:", address);
+  const signer = {
+    type: "EOA" as const,
+    getIdentifier: () => ({
+      identifier:     account.address,
+      identifierKind: IdentifierKind.Ethereum,
+    }),
+    signMessage: async (message: string): Promise<Uint8Array> => {
+      const sig = await account.signMessage({ message });
+      return toBytes(sig);
+    },
+  };
+
+  const dbEncryptionKey = toBytes(keccak256(toBytes(privateKey)));
+
+  const client = await Client.create(signer, {
+    dbEncryptionKey,
+    env: "production",
+  });
+
+  try {
+    await client.revokeAllOtherInstallations();
+    console.log("[xmtp] revoked stale installations");
+  } catch (e) {
+    console.warn("[xmtp] could not revoke installations:", e);
+  }
 
   await client.conversations.sync();
-  console.log("[xmtp] Listening for messages…");
+  console.log(`[xmtp] listening — inboxId: ${client.inboxId}`);
 
-  listenForMessages(client, address).catch(console.error);
+  listenForMessages(client).catch(console.error);
 
   return client;
 }
 
-async function listenForMessages(client: Client, agentAddress: string): Promise<void> {
-  const stream = await client.conversations.streamAllMessages();
+async function listenForMessages(client: Client): Promise<void> {
+  while (true) {
+    try {
+      const stream = await client.conversations.streamAllMessages();
 
-  for await (const message of stream) {
-    if (!message) continue;
+      for await (const message of stream) {
+        if (!message) continue;
+        if (message.senderInboxId === client.inboxId) continue;
+        if (message.contentType?.typeId !== "text") continue;
 
-    // DecodedMessage v3: sender is senderInboxId (may equal wallet address for v3 DMs)
-    const msg       = message as any;
-    const senderId  = (msg.senderInboxId ?? msg.senderAddress ?? "") as string;
-    const convId    = (msg.conversationId ?? "") as string;
-    const content   = msg.content ?? msg.contentStr ?? "";
-    const text      = typeof content === "string" ? content.trim() : "";
+        const content = typeof message.content === "string" ? message.content.trim() : "";
+        if (!content) continue;
 
-    // Skip own messages
-    if (senderId.toLowerCase() === agentAddress.toLowerCase()) continue;
-    if (!text) continue;
+        const convId      = message.conversationId;
+        const senderId    = message.senderInboxId;
+        const userAddress = senderId as `0x${string}`;
+        const send        = buildSendFn(client, convId);
+        const sessionKey  = senderId.toLowerCase();
 
-    const userAddress = senderId as `0x${string}`;
-    const send        = buildSendFn(client, convId);
-    const sessionKey  = senderId.toLowerCase();
+        if (!sessions.has(sessionKey)) {
+          sessions.set(sessionKey, { userAddress, lastSeen: Date.now(), jobCount: 0, history: [] });
+        } else {
+          sessions.get(sessionKey)!.lastSeen = Date.now();
+        }
 
-    // Upsert session
-    if (!sessions.has(sessionKey)) {
-      sessions.set(sessionKey, { userAddress, lastSeen: Date.now(), jobCount: 0, history: [] });
-    } else {
-      sessions.get(sessionKey)!.lastSeen = Date.now();
+        const cmd = content.toLowerCase();
+
+        if (cmd === "help")    { await send(HELP_TEXT); continue; }
+        if (cmd === "status")  { await handleStatus(send, userAddress); continue; }
+        if (cmd === "history") { await handleHistory(send, sessionKey); continue; }
+        if (cmd === "agents")  { await handleAgents(send, content); continue; }
+        if (cmd === "confirm" || cmd === "paid") {
+          await send("✅ Payment is processed via the browser pay page. No manual confirmation needed.");
+          continue;
+        }
+
+        const nonce = randomBytes(16).toString("hex");
+        handleUserRequest(userAddress, content, send, sessionKey, nonce).catch((e) =>
+          console.error("[xmtp] handleUserRequest error:", e),
+        );
+      }
+    } catch (err) {
+      console.error("[xmtp] stream error, restarting in 5s:", err);
+      await new Promise((r) => setTimeout(r, 5000));
     }
-
-    const cmd = text.toLowerCase();
-
-    if (cmd === "help") {
-      await send(HELP_TEXT);
-      continue;
-    }
-
-    if (cmd === "status") {
-      await handleStatus(send, userAddress);
-      continue;
-    }
-
-    if (cmd === "history") {
-      await handleHistory(send, sessionKey);
-      continue;
-    }
-
-    if (cmd === "agents") {
-      await handleAgents(send, text);
-      continue;
-    }
-
-    if (cmd === "confirm" || cmd === "paid") {
-      await send("✅ Payment is processed via the browser pay page. No manual confirmation needed.");
-      continue;
-    }
-
-    const nonce = randomBytes(16).toString("hex");
-    handleUserRequest(userAddress, text, send, sessionKey, nonce).catch((e) =>
-      console.error("[xmtp] handleUserRequest error:", e),
-    );
   }
 }
 
 async function handleStatus(send: (t: string) => Promise<void>, userAddress: `0x${string}`): Promise<void> {
   try {
-    const balance = await getAgentUSDCBalance();
+    const balance  = await getAgentUSDCBalance();
     const userJobs = jobLog.filter((j) => j.userAddress.toLowerCase() === userAddress.toLowerCase());
     await send(
       [
@@ -145,10 +140,7 @@ async function handleStatus(send: (t: string) => Promise<void>, userAddress: `0x
 async function handleHistory(send: (t: string) => Promise<void>, sessionKey: string): Promise<void> {
   const session = sessions.get(sessionKey);
   const history = session?.history?.slice(0, 5) ?? [];
-  if (!history.length) {
-    await send("No completed jobs yet in this session.");
-    return;
-  }
+  if (!history.length) { await send("No completed jobs yet in this session."); return; }
   const lines = history.map((j, i) => {
     const time = new Date(j.timestamp).toLocaleTimeString();
     return `${i + 1}. [${time}] ${j.agentName} · $${(j.margin / 1e6).toFixed(2)} margin`;
@@ -160,18 +152,11 @@ async function handleAgents(send: (t: string) => Promise<void>, query: string): 
   await send("🔍 Scanning ERC-8004 network…");
   try {
     const agent = await findBestAgent(query || "general");
-    if (!agent) {
-      await send("No agents found with score > 85 and x402 support right now.");
-      return;
-    }
-    const stats = [...agentStats.values()]
-      .sort((a, b) => b.jobs - a.jobs)
-      .slice(0, 5);
-
+    if (!agent) { await send("No agents found with score > 85 and x402 support right now."); return; }
+    const stats = [...agentStats.values()].sort((a, b) => b.jobs - a.jobs).slice(0, 5);
     const lines = stats.length
       ? stats.map((a) => `• ${a.name} · score ${a.score.toFixed(1)} · ${a.jobs} jobs · $${(a.price / 1e6).toFixed(2)}/req`)
       : [`• ${agent.name} · score ${agent.score.toFixed(1)} · $${(agent.price / 1e6).toFixed(2)}/req`];
-
     await send(["🔀 *TOP AGENTS (ERC-8004)*", ...lines].join("\n"));
   } catch (e) {
     await send("❌ Could not fetch agents: " + (e as Error).message);

@@ -4,21 +4,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "postinstall": "node scripts/patch-xmtp-proto.cjs",
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
-    "@xmtp/node-sdk": "^0.0.26",
+    "@xmtp/node-sdk": "4.5.1",
     "viem": "^2.21.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^22.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0"
   },
   "engines": {
-    "node": "20.x"
+    "node": ">=20 <22"
   }
 }
