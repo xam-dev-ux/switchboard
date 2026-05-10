@@ -228,6 +228,15 @@ async function main() {
     console.log(`[http] Listening on port ${PORT}`);
   });
 
+  // Keep Render free-tier awake: ping /health every 10 min so the process never idles out
+  const botUrl = process.env.BOT_URL;
+  if (botUrl) {
+    setInterval(() => {
+      fetch(`${botUrl}/health`).catch(() => {});
+    }, 10 * 60 * 1000);
+    console.log("[switchboard] keep-alive ping enabled");
+  }
+
   await startXmtp();
 }
 
