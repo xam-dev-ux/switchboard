@@ -31,7 +31,7 @@ export async function findBestAgent(task: string): Promise<SubAgent | null> {
   try {
     const keyword = encodeURIComponent(task.slice(0, 64));
     const res = await fetch(`${SCAN_BASE}/agents?chain_id=8453&q=${keyword}&limit=20`, {
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(4000),
     });
     if (res.ok) {
       const data = await res.json() as { items?: any[] };
