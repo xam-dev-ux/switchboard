@@ -19,25 +19,7 @@ const HELP_TEXT = [
   "Or just describe your task and I'll find the best agent for $0.05 USDC.",
 ].join("\n");
 
-function buildSendFn(client: Client, convId: string): (text: string) => Promise<void> {
-  return async (text: string): Promise<void> => {
-    console.log(`[xmtp] send → conv=${convId} len=${text.length}`);
-    try {
-      await client.conversations.sync();
-      const conv = await client.conversations.getConversationById(convId);
-      if (conv) {
-        await conv.send(text);
-        console.log(`[xmtp] send OK → conv=${convId}`);
-      } else {
-        console.error(`[xmtp] send FAIL: conv ${convId} not found after sync`);
-      }
-    } catch (e) {
-      console.error(`[xmtp] send error → conv=${convId}:`, e);
-    }
-  };
-}
-
-export async function startXmtp(): Promise<Client> {
+export async function startXmtp(): Promise<void> {
   console.log("[xmtp] startXmtp()");
 
   const privateKey = process.env.AGENT_PRIVATE_KEY as `0x${string}`;
@@ -62,11 +44,7 @@ export async function startXmtp(): Promise<Client> {
   const dbEncryptionKey = toBytes(keccak256(toBytes(privateKey)));
   console.log("[xmtp] Client.create …");
 
-  const client = await Client.create(signer, {
-    dbEncryptionKey,
-    env: "production",
-  });
-
+  const client = await Client.create(signer, { dbEncryptionKey, env: "production" });
   console.log(`[xmtp] client created — inboxId: ${client.inboxId}`);
 
   try {
@@ -76,88 +54,70 @@ export async function startXmtp(): Promise<Client> {
     console.warn("[xmtp] could not revoke installations:", e);
   }
 
-  console.log("[xmtp] conversations.sync() …");
   await client.conversations.sync();
   console.log("[xmtp] initial sync done");
 
-  // Run both streams in background — never await
-  listenForNewConversations(client).catch((e) => console.error("[xmtp] newConv stream crashed:", e));
-  listenForMessages(client).catch((e) => console.error("[xmtp] message stream crashed:", e));
+  console.log(`[xmtp] entering message loop — inboxId: ${client.inboxId}`);
 
-  console.log(`[xmtp] listening — inboxId: ${client.inboxId}`);
-  return client;
-}
-
-// Stream new conversation invites so streamAllMessages() sees them
-async function listenForNewConversations(client: Client): Promise<void> {
-  console.log("[xmtp] starting conversation invite stream …");
   while (true) {
     try {
-      const stream = await client.conversations.stream();
-      console.log("[xmtp] conversation invite stream open");
-      for await (const conv of stream) {
-        if (!conv) continue;
-        console.log(`[xmtp] new conversation discovered: id=${conv.id}`);
-        try {
-          await conv.sync();
-        } catch (e) {
-          console.warn(`[xmtp] conv.sync() failed for ${conv.id}:`, e);
-        }
-      }
-    } catch (err) {
-      console.error("[xmtp] conversation stream error, restarting in 5s:", err);
-      await new Promise((r) => setTimeout(r, 5000));
-    }
-  }
-}
-
-async function listenForMessages(client: Client): Promise<void> {
-  console.log("[xmtp] starting message stream …");
-  while (true) {
-    try {
-      // Re-sync before each stream open so we pick up new conversations
       await client.conversations.sync();
       console.log("[xmtp] sync done, opening streamAllMessages …");
 
       const stream = await client.conversations.streamAllMessages();
-      console.log("[xmtp] streamAllMessages open");
+      console.log("[xmtp] streamAllMessages open — waiting for messages …");
 
       for await (const message of stream) {
         if (!message) {
-          console.log("[xmtp] null message, skipping");
+          console.log("[xmtp] null message");
           continue;
         }
 
         console.log(
-          `[xmtp] raw message: id=${message.id} ` +
+          `[xmtp] raw msg id=${message.id} ` +
           `sender=${message.senderInboxId} ` +
           `conv=${message.conversationId} ` +
           `typeId=${message.contentType?.typeId ?? "?"}`
         );
 
         if (message.senderInboxId === client.inboxId) {
-          console.log("[xmtp] skip: own message");
+          console.log("[xmtp] skip own message");
           continue;
         }
 
         if (message.contentType?.typeId !== "text") {
-          console.log(`[xmtp] skip: non-text typeId=${message.contentType?.typeId}`);
+          console.log(`[xmtp] skip non-text typeId=${message.contentType?.typeId}`);
           continue;
         }
 
         const content = typeof message.content === "string" ? message.content.trim() : "";
         if (!content) {
-          console.log("[xmtp] skip: empty content");
+          console.log("[xmtp] skip empty content");
           continue;
         }
 
         const convId     = message.conversationId;
         const senderId   = message.senderInboxId;
         const userAddr   = senderId as `0x${string}`;
-        const send       = buildSendFn(client, convId);
         const sessionKey = senderId.toLowerCase();
 
         console.log(`[xmtp] message from ${senderId}: "${content.slice(0, 80)}"`);
+
+        const send = async (text: string): Promise<void> => {
+          console.log(`[xmtp] send → conv=${convId} len=${text.length}`);
+          try {
+            await client.conversations.sync();
+            const conv = await client.conversations.getConversationById(convId);
+            if (conv) {
+              await conv.send(text);
+              console.log(`[xmtp] send OK → conv=${convId}`);
+            } else {
+              console.error(`[xmtp] send FAIL: conv ${convId} not found after sync`);
+            }
+          } catch (e) {
+            console.error(`[xmtp] send error:`, e);
+          }
+        };
 
         if (!sessions.has(sessionKey)) {
           console.log(`[xmtp] new session for ${senderId}`);
@@ -169,27 +129,27 @@ async function listenForMessages(client: Client): Promise<void> {
         const cmd = content.toLowerCase();
 
         if (cmd === "help") {
-          console.log(`[xmtp] command: help`);
+          console.log("[xmtp] command: help");
           await send(HELP_TEXT);
           continue;
         }
         if (cmd === "status") {
-          console.log(`[xmtp] command: status`);
+          console.log("[xmtp] command: status");
           await handleStatus(send, userAddr);
           continue;
         }
         if (cmd === "history") {
-          console.log(`[xmtp] command: history`);
+          console.log("[xmtp] command: history");
           await handleHistory(send, sessionKey);
           continue;
         }
         if (cmd === "agents") {
-          console.log(`[xmtp] command: agents`);
+          console.log("[xmtp] command: agents");
           await handleAgents(send, content);
           continue;
         }
         if (cmd === "confirm" || cmd === "paid") {
-          console.log(`[xmtp] command: confirm`);
+          console.log("[xmtp] command: confirm");
           await send("✅ Payment is processed via the browser pay page. No manual confirmation needed.");
           continue;
         }
@@ -201,7 +161,7 @@ async function listenForMessages(client: Client): Promise<void> {
         );
       }
 
-      console.log("[xmtp] streamAllMessages ended, restarting …");
+      console.log("[xmtp] stream ended, restarting …");
     } catch (err) {
       console.error("[xmtp] stream error, restarting in 5s:", err);
       await new Promise((r) => setTimeout(r, 5000));
