@@ -209,6 +209,10 @@ async function handler(req: http.IncomingMessage, res: http.ServerResponse): Pro
 
 async function main() {
   console.log("[switchboard] Starting…");
+  console.log(`[switchboard] BOT_URL=${process.env.BOT_URL ?? "(not set)"}`);
+  if (!process.env.BOT_URL || process.env.BOT_URL.includes("switchboard.onrender.com") && !process.env.BOT_URL.includes("-")) {
+    console.warn("[switchboard] ⚠️  BOT_URL looks wrong — pay links will be broken. Set it to your full Render URL (e.g. https://switchboard-7u7o.onrender.com)");
+  }
 
   const server = http.createServer((req, res) => {
     handler(req, res).catch((err) => {
